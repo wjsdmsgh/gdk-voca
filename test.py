@@ -2,7 +2,6 @@ import streamlit as st
 import json, os
 from openai import OpenAI
 
-# ================= 기본 설정 =================
 st.set_page_config(page_title="AI 영어 단어장", layout="centered")
 
 DATA_FILE = "voca.json"
@@ -34,7 +33,6 @@ if "quiz" not in st.session_state:
         "wrong": [],
         "idx": 0,
         "correct": 0,
-        "state": "CHECK",
         "dir": "EN_KO"
     }
 
@@ -42,12 +40,18 @@ if "quiz" not in st.session_state:
 def home():
     st.title("📚 단어장 선택")
 
-    name = st.text_input("회차 (예: 24년 3월)")
+    with st.form("session_form"):
+        name = st.text_input(
+            "회차",
+            autofocus=True,
+            label_visibility="collapsed"
+        )
+        submitted = st.form_submit_button("생성")
 
-    if st.button("➕ 새로 만들기") and name:
-        voca_db.setdefault(name, [])
+    if submitted and name.strip():
+        voca_db.setdefault(name.strip(), [])
         save_db(voca_db)
-        st.session_state.current_session = name
+        st.session_state.current_session = name.strip()
         st.session_state.page = "vocab"
         st.rerun()
 
@@ -67,21 +71,25 @@ def vocab_page():
         st.session_state.page = "home"
         st.rerun()
 
-    word = st.text_input("영어 단어")
-    mean = st.text_input("뜻 (/로 구분)")
+    # ---------- 단어 추가 ----------
+    with st.form("add_word"):
+        word = st.text_input(
+            "영어 단어",
+            autofocus=True
+        )
+        mean = st.text_input("뜻 (/로 구분)")
+        submitted = st.form_submit_button("추가")
 
-    if st.button("단어 추가") and word:
+    if submitted and word.strip():
         ai_mean = client.responses.create(
             model="gpt-4.1-mini",
-            input=f"영어 단어 '{word}'의 가장 많이 쓰이는 한국어 뜻을 핵심 단어만 / 로 구분해서 알려줘."
+            input=f"영어 단어 '{word}'의 가장 많이 쓰이는 한국어 뜻을 /로 구분해서 알려줘."
         ).output_text.strip()
 
-        user_set = set(mean.split("/")) if mean else set()
-        ai_set = set(ai_mean.split("/"))
-        final = "/".join(user_set | ai_set)
+        final = "/".join(set(mean.split("/")) | set(ai_mean.split("/")))
 
         voca_db[s].append({
-            "word": word,
+            "word": word.strip(),
             "mean": final,
             "wrong": 0
         })
@@ -91,12 +99,22 @@ def vocab_page():
     st.divider()
     st.subheader("📋 단어 목록")
 
+    # ---------- 단어 목록 + 뜻 수정 ----------
     for i, v in enumerate(voca_db[s]):
-        col1, col2 = st.columns([4, 1])
+        col1, col2 = st.columns([3, 1])
+
         with col1:
-            st.write(f"**{v['word']}** — {v['mean']}")
+            new_mean = st.text_input(
+                v["word"],
+                value=v["mean"],
+                key=f"mean_{i}"
+            )
+            if new_mean != v["mean"]:
+                v["mean"] = new_mean
+                save_db(voca_db)
+
         with col2:
-            if st.button("❌", key=f"del{i}"):
+            if st.button("❌", key=f"del_{i}"):
                 voca_db[s].remove(v)
                 save_db(voca_db)
                 st.rerun()
@@ -108,7 +126,6 @@ def vocab_page():
         q["wrong"] = []
         q["idx"] = 0
         q["correct"] = 0
-        q["state"] = "CHECK"
         q["dir"] = "EN_KO"
         st.session_state.page = "quiz"
         st.rerun()
@@ -122,13 +139,12 @@ def quiz_page():
         st.title("🏁 퀴즈 종료")
         st.write(f"{len(lst)}문제 중 {q['correct']}개 정답")
 
-        if q["wrong"]:
-            if st.button("❌ 오답만 다시 풀기"):
-                q["list"] = q["wrong"]
-                q["wrong"] = []
-                q["idx"] = 0
-                q["correct"] = 0
-                st.rerun()
+        if q["wrong"] and st.button("❌ 오답만 다시 풀기"):
+            q["list"] = q["wrong"]
+            q["wrong"] = []
+            q["idx"] = 0
+            q["correct"] = 0
+            st.rerun()
 
         if st.button("⬅ 돌아가기"):
             st.session_state.page = "vocab"
@@ -137,16 +153,13 @@ def quiz_page():
 
     item = lst[q["idx"]]
 
-    if st.checkbox("한 → 영"):
-        q["dir"] = "KO_EN"
-    else:
-        q["dir"] = "EN_KO"
+    q["dir"] = "KO_EN" if st.checkbox("한 → 영") else "EN_KO"
 
-    st.write(f"### {item['word'] if q['dir']=='EN_KO' else item['mean']}")
+    st.subheader(item["word"] if q["dir"] == "EN_KO" else item["mean"])
     st.write(f"{q['idx'] + 1} / {len(lst)}")
 
     with st.form("answer"):
-        user = st.text_input("정답 입력", autofocus=True)
+        user = st.text_input("정답", autofocus=True)
         submitted = st.form_submit_button("확인")
 
     if submitted:
