@@ -1,260 +1,189 @@
-import flet as ft
+import streamlit as st
 from openai import OpenAI
-import json, os, random
+import json, os
 
-OPENAI_API_KEY = ""
-client = OpenAI(api_key=OPENAI_API_KEY)
-
+# ================= 설정 =================
 DATA_FILE = "voca.json"
 
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+# ================= DB =================
 def load_db():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-
 def save_db(db):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
 
+# ================= 상태 =================
+if "page" not in st.session_state:
+    st.session_state.page = "home"
 
-def main(page: ft.Page):
-    page.title = "AI 영어 단어장"
-    page.window_width = 520
-    page.window_height = 900
+if "current_session" not in st.session_state:
+    st.session_state.current_session = None
 
-    voca_db = load_db()
-    current_session = None
+if "quiz" not in st.session_state:
+    st.session_state.quiz = {}
 
-    quiz_list = []
-    wrong_list = []
-    idx = 0
-    correct = 0
-    state = "CHECK"
-    quiz_dir = "EN_KO"
+voca_db = load_db()
 
-    # ================= 홈 =================
-    def home():
-        page.clean()
+# ================= 홈 =================
+def home():
+    st.title("📚 단어장 선택")
 
-        session_col = ft.Column()
-
-        def refresh():
-            session_col.controls.clear()
-            for s in voca_db:
-                session_col.controls.append(
-                    ft.ElevatedButton(
-                        s, on_click=lambda e, ss=s: open_vocab(ss)
-                    )
-                )
-            page.update()
-
-        session_in = ft.TextField(
-            label="회차 (예: 24년 3월)",
-            on_submit=lambda e: create()
-        )
-
-        def create():
-            name = session_in.value.strip()
-            if not name:
-                return
+    with st.form("create_session", clear_on_submit=True):
+        name = st.text_input("회차")
+        submitted = st.form_submit_button("생성")
+        if submitted and name:
             voca_db.setdefault(name, [])
             save_db(voca_db)
-            open_vocab(name)
+            st.session_state.current_session = name
+            st.session_state.page = "vocab"
+            st.rerun()
 
-        page.add(
-            ft.Text("📚 단어장 선택", size=26, weight="bold"),
-            session_in,
-            ft.ElevatedButton("➕ 새로 만들기", on_click=lambda e: create()),
-            ft.Divider(),
-            session_col
-        )
-        refresh()
+    st.divider()
 
-    def open_vocab(name):
-        nonlocal current_session
-        current_session = name
-        vocab_page()
+    for s in voca_db:
+        if st.button(s):
+            st.session_state.current_session = s
+            st.session_state.page = "vocab"
+            st.rerun()
 
-    # ================= 단어장 =================
-    def vocab_page():
-        page.clean()
+# ================= 단어장 =================
+def vocab_page():
+    session = st.session_state.current_session
+    st.title(session)
 
-        word_in = ft.TextField(label="영어 단어", autofocus=True)
-        mean_in = ft.TextField(label="뜻 (/로 구분)")
+    if st.button("⬅ 회차 선택"):
+        st.session_state.page = "home"
+        st.rerun()
 
-        word_list = ft.Column(scroll="auto", height=260)
+    # -------- 단어 추가 --------
+    with st.form("add_word", clear_on_submit=True):
+        word = st.text_input("영어 단어")
+        mean = st.text_input("뜻 (/로 구분)")
+        submitted = st.form_submit_button("추가")
 
-        def add_word():
-            w = word_in.value.strip()
-            user_mean = mean_in.value.strip()
-
-            if not w:
-                return
-
+        if submitted and word:
             ai_mean = client.responses.create(
                 model="gpt-4.1-mini",
-                input=f"영어 단어 '{w}'의 가장 많이 쓰이는 한국어 뜻을 핵심 단어만 / 로 구분해서 알려줘."
+                input=f"영어 단어 '{word}'의 가장 많이 쓰이는 한국어 뜻을 핵심 단어만 / 로 구분해서 알려줘."
             ).output_text.strip()
 
-            user_set = set(user_mean.split("/")) if user_mean else set()
+            user_set = set(mean.split("/")) if mean else set()
             ai_set = set(ai_mean.split("/"))
             final_mean = "/".join(user_set.union(ai_set))
 
-            voca_db[current_session].append({
-                "word": w,
+            voca_db[session].append({
+                "word": word,
                 "mean": final_mean,
                 "wrong": 0
             })
             save_db(voca_db)
+            st.rerun()
 
-            word_in.value = ""
-            mean_in.value = ""
-            word_in.focus()
-            refresh_list()
+    st.divider()
+    st.subheader("📋 단어 목록")
 
-        word_in.on_submit = lambda e: mean_in.focus()
-        mean_in.on_submit = lambda e: add_word()
+    for i, item in enumerate(voca_db[session]):
+        col1, col2 = st.columns([5, 1])
 
-        def refresh_list():
-            word_list.controls.clear()
-            for item in voca_db[current_session]:
-                tf = ft.TextField(
-                    value=item["mean"],
-                    on_change=lambda e, it=item: it.update({"mean": e.control.value})
-                )
-
-                word_list.controls.append(
-                    ft.Row([
-                        ft.Column([
-                            ft.Text(item["word"], weight="bold"),
-                            tf
-                        ], expand=True),
-                        ft.IconButton(
-                            ft.Icons.DELETE,
-                            icon_color="red",
-                            on_click=lambda e, it=item: delete(it)
-                        )
-                    ])
-                )
-            page.update()
-
-        def delete(it):
-            voca_db[current_session].remove(it)
-            save_db(voca_db)
-            refresh_list()
-
-        page.add(
-            ft.ElevatedButton("⬅ 회차 선택", on_click=lambda e: home()),
-            ft.Text(current_session, size=24, weight="bold"),
-            word_in,
-            mean_in,
-            ft.Divider(),
-            ft.Text("📋 단어 목록"),
-            word_list,
-            ft.Divider(),
-            ft.ElevatedButton("▶ 퀴즈 시작", on_click=lambda e: quiz_page())
-        )
-        refresh_list()
-
-    # ================= 퀴즈 =================
-        # ================= 퀴즈 =================
-    def quiz_page():
-        nonlocal quiz_list, wrong_list, idx, correct, state, quiz_dir
-
-        page.clean()
-        quiz_list = sorted(
-            voca_db[current_session],
-            key=lambda x: -x["wrong"]
-        )
-        wrong_list = []
-        idx = 0
-        correct = 0
-        state = "CHECK"
-
-        q_text = ft.Text("", size=24, weight="bold")
-        prog = ft.Text("")
-        ans = ft.TextField(autofocus=True)
-        res = ft.Text("", size=18)
-
-        toggle = ft.Switch(
-            label="영 → 한",
-            value=False,
-            on_change=lambda e: set_dir(e.control.value)
-        )
-
-        def set_dir(v):
-            nonlocal quiz_dir
-            quiz_dir = "KO_EN" if v else "EN_KO"
-            toggle.label = "한 → 영" if v else "영 → 한"
-            show()
-
-        def show():
-            nonlocal state
-            if idx >= len(quiz_list):
-                end()
-                return
-
-            q = quiz_list[idx]
-            q_text.value = q["word"] if quiz_dir == "EN_KO" else q["mean"]
-            prog.value = f"{idx + 1} / {len(quiz_list)}"
-            ans.value = ""
-            res.value = ""
-            state = "CHECK"
-            ans.focus()
-            page.update()
-
-        def submit(e):
-            nonlocal idx, correct, state
-
-            q = quiz_list[idx]
-
-            # 1️⃣ 정답 체크 단계
-            if state == "CHECK":
-                user = ans.value.strip()
-
-                if quiz_dir == "EN_KO":
-                    answers = [a.strip() for a in q["mean"].split("/")]
-                else:
-                    answers = [q["word"]]
-
-                if user in answers:
-                    res.value = "✅ 정답"
-                    correct += 1
-                else:
-                    res.value = "❌ 오답"
-                    q["wrong"] += 1
-                    wrong_list.append(q)
-
-                state = "NEXT"
-                ans.focus()  # ⭐ 핵심: 포커스 유지
-
-            # 2️⃣ 다음 문제로 이동
-            else:
-                idx += 1
-                show()
-
-            page.update()
-
-        ans.on_submit = submit
-
-        def end():
-            page.clean()
-            page.add(
-                ft.Text("🏁 퀴즈 종료", size=26, weight="bold"),
-                ft.Text(f"{len(quiz_list)}문제 중 {correct}개 정답"),
-                ft.ElevatedButton("❌ 오답만 다시 풀기", on_click=lambda e: retry()),
-                ft.ElevatedButton("⬅ 돌아가기", on_click=lambda e: vocab_page())
+        with col1:
+            st.markdown(f"**{item['word']}**")
+            new_mean = st.text_input(
+                "",
+                value=item["mean"],
+                key=f"mean_{i}"
             )
+            if new_mean != item["mean"]:
+                item["mean"] = new_mean
+                save_db(voca_db)
 
-        def retry():
-            nonlocal quiz_list, idx, correct
-            quiz_list = wrong_list
-            idx = 0
-            correct = 0
-            show()
+        with col2:
+            if st.button("🗑", key=f"del_{i}"):
+                voca_db[session].remove(item)
+                save_db(voca_db)
+                st.rerun()
 
-        page.add(toggle, prog, q_text, ans, res)
-        show()
+    st.divider()
+    if st.button("▶ 퀴즈 시작"):
+        quiz_list = sorted(voca_db[session], key=lambda x: -x["wrong"])
+        st.session_state.quiz = {
+            "list": quiz_list,
+            "wrong": [],
+            "idx": 0,
+            "correct": 0,
+            "state": "CHECK",
+            "dir": "EN_KO"
+        }
+        st.session_state.page = "quiz"
+        st.rerun()
+
+# ================= 퀴즈 =================
+def quiz_page():
+    qz = st.session_state.quiz
+    lst = qz["list"]
+
+    if qz["idx"] >= len(lst):
+        st.title("🏁 퀴즈 종료")
+        st.write(f"{len(lst)}문제 중 {qz['correct']}개 정답")
+
+        if st.button("❌ 오답만 다시 풀기"):
+            qz["list"] = qz["wrong"]
+            qz["wrong"] = []
+            qz["idx"] = 0
+            qz["correct"] = 0
+            st.rerun()
+
+        if st.button("⬅ 돌아가기"):
+            st.session_state.page = "vocab"
+            st.rerun()
+        return
+
+    q = lst[qz["idx"]]
+
+    if st.checkbox("한 → 영"):
+        qz["dir"] = "KO_EN"
+    else:
+        qz["dir"] = "EN_KO"
+
+    st.write(f"{qz['idx'] + 1} / {len(lst)}")
+    st.subheader(q["word"] if qz["dir"] == "EN_KO" else q["mean"])
+
+    with st.form("answer"):
+        ans = st.text_input("정답")
+        submitted = st.form_submit_button("확인")
+
+        if submitted:
+            if qz["state"] == "CHECK":
+                answers = (
+                    [a.strip() for a in q["mean"].split("/")]
+                    if qz["dir"] == "EN_KO"
+                    else [q["word"]]
+                )
+
+                if ans.strip() in answers:
+                    st.success("정답")
+                    qz["correct"] += 1
+                else:
+                    st.error("오답")
+                    q["wrong"] += 1
+                    qz["wrong"].append(q)
+
+                qz["state"] = "NEXT"
+            else:
+                qz["idx"] += 1
+                qz["state"] = "CHECK"
+
+            st.rerun()
+
+# ================= 실행 =================
+if st.session_state.page == "home":
+    home()
+elif st.session_state.page == "vocab":
+    vocab_page()
+else:
+    quiz_page()
