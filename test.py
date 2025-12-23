@@ -1,10 +1,17 @@
 import streamlit as st
-from openai import OpenAI
 import json, os
 
 # ================= 설정 =================
 DATA_FILE = "voca.json"
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+# ================= OpenAI (선택) =================
+client = None
+try:
+    from openai import OpenAI
+    if "OPENAI_API_KEY" in st.secrets:
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except:
+    client = None
 
 # ================= DB =================
 def load_db():
@@ -92,6 +99,7 @@ def home():
     with st.form("create_session", clear_on_submit=True):
         name = st.text_input("회차")
         submitted = st.form_submit_button("생성")
+
         if submitted and name:
             voca_db.setdefault(name, [])
             save_db(db)
@@ -125,12 +133,21 @@ def vocab_page():
         submitted = st.form_submit_button("추가")
 
         if submitted and word:
-            ai_mean = client.responses.create(
-                model="gpt-4.1-mini",
-                input=f"영어 단어 '{word}'의 가장 많이 쓰이는 한국어 뜻을 핵심 단어만 / 로 구분해서 알려줘."
-            ).output_text.strip()
+            ai_mean = ""
 
-            final_mean = "/".join(set(mean.split("/")) | set(ai_mean.split("/")))
+            if client:
+                try:
+                    ai_mean = client.responses.create(
+                        model="gpt-4.1-mini",
+                        input=f"영어 단어 '{word}'의 가장 많이 쓰이는 한국어 뜻을 핵심 단어만 / 로 구분해서 알려줘."
+                    ).output_text.strip()
+                except:
+                    ai_mean = ""
+
+            final_mean = "/".join(
+                set(filter(None, mean.split("/"))) |
+                set(filter(None, ai_mean.split("/")))
+            )
 
             voca_db[session].append({
                 "word": word,
@@ -171,7 +188,6 @@ def vocab_page():
             "wrong": [],
             "idx": 0,
             "correct": 0,
-            "state": "CHECK",
             "dir": "EN_KO"
         }
         st.session_state.page = "quiz"
@@ -185,13 +201,6 @@ def quiz_page():
     if qz["idx"] >= len(lst):
         st.title("🏁 퀴즈 종료")
         st.write(f"{len(lst)}문제 중 {qz['correct']}개 정답")
-
-        if st.button("❌ 오답만 다시 풀기"):
-            qz["list"] = qz["wrong"]
-            qz["wrong"] = []
-            qz["idx"] = 0
-            qz["correct"] = 0
-            st.rerun()
 
         if st.button("⬅ 돌아가기"):
             st.session_state.page = "vocab"
